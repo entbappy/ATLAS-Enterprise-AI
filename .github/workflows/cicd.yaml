@@ -50,9 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
-    outputs:
-      image: ${{ steps.build-image.outputs.image }}
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -69,7 +66,6 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and Push Docker Image
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
@@ -79,10 +75,12 @@ jobs:
 
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
+          echo "Building Docker image..."
+
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Docker image pushed successfully"
 
   # ==========================================
   # 3. CONTINUOUS DEPLOYMENT - EC2
@@ -106,22 +104,34 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Validate ECR Image
+      - name: Construct and Validate ECR Image
+        id: image
         env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          if [[ ! "$IMAGE" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/ ]]; then
-            echo "::error::Invalid or missing ECR image URI"
+          ACCOUNT_ID=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+          IMAGE="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          if [[ ! "$IMAGE" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/ ]]; then
+            echo "::error::Invalid ECR image URI"
             exit 1
           fi
 
-          echo "Valid ECR image URI"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+          echo "ECR image URI validated"
 
       - name: Pull Docker Image
         env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.image }}
         run: |
           docker pull "$IMAGE"
 
@@ -138,7 +148,7 @@ jobs:
 
       - name: Start New Container
         env:
-          IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.image }}
         run: |
           docker run -d \
             --name atlas-enterprise-ai \
