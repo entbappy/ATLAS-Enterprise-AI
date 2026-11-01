@@ -83,6 +83,7 @@ jobs:
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+
   # ==========================================
   # 3. CONTINUOUS DEPLOYMENT - EC2
   # ==========================================
