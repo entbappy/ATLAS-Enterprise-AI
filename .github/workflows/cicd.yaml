@@ -11,7 +11,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
@@ -42,7 +41,7 @@ jobs:
           python -m compileall -q app worker scripts
 
   # ==========================================
-  # 2. CONTINUOUS DELIVERY - BUILD & PUSH ECR
+  # 2. CONTINUOUS DELIVERY - ECR
   # ==========================================
 
   build-and-push-ecr-image:
@@ -59,17 +58,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
+      - name: Build and Push Docker Image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -96,7 +96,14 @@ jobs:
     environment: production
 
     steps:
-      - name: Login to Amazon ECR using EC2 IAM role
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
@@ -107,20 +114,22 @@ jobs:
             docker login --username AWS \
               --password-stdin "$REGISTRY"
 
-      - name: Pull new Docker image
+      - name: Pull Docker Image
         env:
           IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
         run: |
           docker pull "$IMAGE"
 
-      - name: Stop and remove old container
+      - name: Stop Old Container
         run: |
           docker rm -f atlas-enterprise-ai || true
 
-      - name: Start updated container
+      - name: Start New Container
         env:
           IMAGE: ${{ needs.build-and-push-ecr-image.outputs.image }}
         run: |
+          test -f /opt/atlas/.env
+
           docker run -d \
             --name atlas-enterprise-ai \
             --restart unless-stopped \
@@ -128,7 +137,7 @@ jobs:
             -p 8000:8000 \
             "$IMAGE"
 
-      - name: Verify application
+      - name: Verify Deployment
         run: |
           sleep 10
 
@@ -140,10 +149,11 @@ jobs:
           fi
 
           curl --fail --silent --show-error \
-            --retry 5 --retry-delay 3 \
+            --retry 5 \
+            --retry-delay 3 \
             http://127.0.0.1:8000/ \
             > /dev/null
 
-      - name: Clean unused Docker images
+      - name: Clean Unused Docker Images
         run: |
           docker image prune -f
